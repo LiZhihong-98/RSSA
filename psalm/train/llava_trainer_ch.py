@@ -15,11 +15,15 @@ from transformers.utils import (
     is_accelerate_available,
 )
 
+# 如果 APEX 库可用，导入它
 if is_apex_available():
     from apex import amp
+
+# 如果 SageMaker MP 环境可用，导入相关工具
 if is_sagemaker_mp_enabled():
     from transformers.trainer_pt_utils import smp_forward_backward
 
+# 导入一系列需要的库和工具，包括上下文管理器、路径处理、随机操作、以及 transformers 的组件
 import contextlib
 import copy
 import functools
@@ -39,9 +43,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
-
 import torch
-
 from packaging import version
 from torch.utils.data import DataLoader, Dataset, RandomSampler, SequentialSampler
 
@@ -99,7 +101,7 @@ from transformers.utils import (
     strtobool,
 )
 
-
+# 默认回调和进度回调
 DEFAULT_CALLBACKS = [DefaultFlowCallback]
 DEFAULT_PROGRESS_CALLBACK = ProgressCallback
 
@@ -118,7 +120,6 @@ if is_torch_tpu_available(check_device=False):
     import torch_xla.core.xla_model as xm
     import torch_xla.debug.metrics as met
 
-
 if is_sagemaker_mp_enabled():
     import smdistributed.modelparallel.torch as smp
     from smdistributed.modelparallel import __version__ as SMP_VERSION
@@ -134,14 +135,11 @@ if is_sagemaker_mp_enabled():
 else:
     IS_SAGEMAKER_MP_POST_1_10 = False
 
-
 if is_safetensors_available():
     import safetensors.torch
 
-
 if is_peft_available():
     from peft import PeftModel
-
 
 if is_accelerate_available():
     from accelerate import Accelerator, skip_first_batches
@@ -164,15 +162,12 @@ if is_accelerate_available():
     if is_deepspeed_available():
         from accelerate.utils import DeepSpeedSchedulerWrapper
 
-
 if TYPE_CHECKING:
     import optuna
 
-
 logger = logging.get_logger(__name__)
 
-
-# Name of the files used for checkpointing
+# 定义检查点文件名的常量
 TRAINING_ARGS_NAME = "training_args.bin"
 TRAINER_STATE_NAME = "trainer_state.json"
 OPTIMIZER_NAME = "optimizer.pt"
@@ -180,6 +175,9 @@ OPTIMIZER_NAME_BIN = "optimizer.bin"
 SCHEDULER_NAME = "scheduler.pt"
 SCALER_NAME = "scaler.pt"
 FSDP_MODEL_NAME = "pytorch_model_fsdp"
+
+# 工具函数：可能需要对 Zero-3 优化参数进行特殊处理
+# "Zero-3" 是 DeepSpeed 中的一种分布式内存优化技术
 
 
 def maybe_zero_3(param, ignore_status=False, name=None):
@@ -197,6 +195,10 @@ def maybe_zero_3(param, ignore_status=False, name=None):
     return param
 
 
+# 提取并保存多模态适配器状态
+# 主要用于处理特定关键字的参数
+
+
 def get_mm_adapter_state_maybe_zero_3(named_params, keys_to_match):
     to_return = {
         k: t
@@ -210,53 +212,10 @@ def get_mm_adapter_state_maybe_zero_3(named_params, keys_to_match):
     return to_return
 
 
+# 自定义 Trainer 类，继承自 transformers 的 Trainer
 class LLaVATrainer(Trainer):
-    # def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
-    #     """
-    #     Perform a training step on a batch of inputs.
-    #
-    #     Subclass and override to inject custom behavior.
-    #
-    #     Args:
-    #         model (`nn.Module`):
-    #             The model to train.
-    #         inputs (`Dict[str, Union[torch.Tensor, Any]]`):
-    #             The inputs and targets of the model.
-    #
-    #             The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
-    #             argument `labels`. Check your model's documentation for all accepted arguments.
-    #
-    #     Return:
-    #         `torch.Tensor`: The tensor with training loss on this batch.
-    #     """
-    #     model.train()
-    #     inputs = self._prepare_inputs(inputs)
-    #     if dist.is_available():
-    #         dist.barrier()
-    #     import ipdb;ipdb.set_trace()
-    #     if hasattr(self.train_dataset,'cur_dataset_index'):
-    #         self.train_dataset.update_dataset_index()
-    #     print(self.train_dataset.cur_dataset_index)
-    #
-    #
-    #     if is_sagemaker_mp_enabled():
-    #         loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
-    #         return loss_mb.reduce_mean().detach().to(self.args.device)
-    #
-    #     with self.compute_loss_context_manager():
-    #         loss = self.compute_loss(model, inputs)
-    #
-    #     if self.args.n_gpu > 1:
-    #         loss = loss.mean()  # mean() to average on multi-gpu parallel training
-    #
-    #     if self.use_apex:
-    #         with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-    #             scaled_loss.backward()
-    #     else:
-    #         self.accelerator.backward(loss)
-    #
-    #     return loss.detach() / self.args.gradient_accumulation_steps
 
+    # 重写保存检查点的方法，根据条件保存模型的多模态适配器状态
     def _save_checkpoint(self, model, trial, metrics=None):
         if getattr(self.args, "tune_mm_mlp_adapter", False):
             from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
@@ -266,7 +225,7 @@ class LLaVATrainer(Trainer):
             run_dir = self._get_output_dir(trial=trial)
             output_dir = os.path.join(run_dir, checkpoint_folder)
 
-            # Only save Adapter
+            # 仅保存多模态适配器的权重
             keys_to_match = ["mm_projector"]
             if getattr(self.args, "use_im_start_end", False):
                 keys_to_match.extend(["embed_tokens", "embed_in"])
@@ -283,12 +242,14 @@ class LLaVATrainer(Trainer):
         else:
             super(LLaVATrainer, self)._save_checkpoint(model, trial, metrics)
 
+    # 重写保存方法，支持保存的自定义操作
     def _save(self, output_dir: Optional[str] = None, state_dict=None):
         if getattr(self.args, "tune_mm_mlp_adapter", False):
             pass
         else:
             super(LLaVATrainer, self)._save(output_dir, state_dict)
 
+    # 更新历史损失字典，用于记录不同损失类型的历史值
     def update_history_loss_dict(self, outputs):
         if not hasattr(self, "history_loss_dict"):
             self.history_loss_dict = {}
@@ -300,19 +261,18 @@ class LLaVATrainer(Trainer):
                     if value != 0:
                         self.history_loss_dict[name] = value.item()
 
+    # 自定义计算损失的方法
     def compute_loss(self, model, inputs, return_outputs=False):
         """
-        How the loss is computed by Trainer. By default, all models return the loss in the first element.
-
-        Subclass and override for custom behavior.
+        定义 Trainer 的损失计算逻辑，支持自定义行为。
         """
         if self.label_smoother is not None and "labels" in inputs:
             labels = inputs.pop("labels")
         else:
             labels = None
         outputs = model(**inputs)
-        # Save past state if it exists
-        # TODO: this needs to be fixed and made cleaner later.
+
+        # 如果模型返回 "past" 状态，保存下来（通常用于语言模型）
         if self.args.past_index >= 0:
             self._past = outputs[self.args.past_index]
 
@@ -330,7 +290,7 @@ class LLaVATrainer(Trainer):
                     "The model did not return a loss from the inputs, only the following keys: "
                     f"{','.join(outputs.keys())}. For reference, the inputs it received are {','.join(inputs.keys())}."
                 )
-            # We don't use .loss here since the model may return tuples instead of ModelOutput.
+            # 如果输出是字典，从中提取损失值
             loss = outputs["loss"] if isinstance(outputs, dict) else outputs[0]
             if isinstance(outputs, dict) and "loss_dice" in outputs:
                 loss_dict = {}
@@ -341,57 +301,6 @@ class LLaVATrainer(Trainer):
                             loss_value = self.history_loss_dict[name]
                         loss_dict[name] = loss_value
                 self.update_history_loss_dict(outputs)
-                # loss_mask = outputs["loss_mask"].item() if isinstance(outputs, dict) else 0
-                # loss_dice = outputs["loss_dice"].item() if isinstance(outputs, dict) else 0
-                # loss_SEG_class = outputs["loss_SEG_class"].item() if isinstance(outputs, dict) else 0
-                # loss_class_name_class = outputs["loss_class_name_class"].item() if isinstance(outputs, dict) else 0
-                # loss_dict = {
-                #     'loss_mask':loss_mask,
-                #     'loss_dice': loss_dice,
-                #     'loss_SEG_class':loss_SEG_class,
-                #     'loss_class_name_class': loss_class_name_class
-                # }
                 self.log(loss_dict)
 
         return (loss, outputs) if return_outputs else loss
-
-    # def training_step(self, model, inputs) -> torch.Tensor:
-    #     """
-    #     Perform a training step on a batch of inputs.
-    #
-    #     Subclass and override to inject custom behavior.
-    #
-    #     Args:
-    #         model (`nn.Module`):
-    #             The model to train.
-    #         inputs (`Dict[str, Union[torch.Tensor, Any]]`):
-    #             The inputs and targets of the model.
-    #
-    #             The dictionary will be unpacked before being fed to the model. Most models expect the targets under the
-    #             argument `labels`. Check your model's documentation for all accepted arguments.
-    #
-    #     Return:
-    #         `torch.Tensor`: The tensor with training loss on this batch.
-    #     """
-    #     model.train()
-    #     inputs = self._prepare_inputs(inputs)
-    #
-    #     if is_sagemaker_mp_enabled():
-    #         loss_mb = smp_forward_backward(model, inputs, self.args.gradient_accumulation_steps)
-    #         return loss_mb.reduce_mean().detach().to(self.args.device)
-    #
-    #     with self.compute_loss_context_manager():
-    #         loss = self.compute_loss(model, inputs)
-    #
-    #     if self.args.n_gpu > 1:
-    #         loss = loss.mean()  # mean() to average on multi-gpu parallel training
-    #
-    #     if self.do_grad_scaling:
-    #         self.scaler.scale(loss).backward()
-    #     elif self.use_apex:
-    #         with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-    #             scaled_loss.backward()
-    #     else:
-    #         self.accelerator.backward(loss)
-    #
-    #     return loss.detach() / self.args.gradient_accumulation_steps
