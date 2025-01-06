@@ -6,11 +6,23 @@ import json
 from tqdm import tqdm
 import shortuuid
 import numpy as np
-from psalm.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, \
-    DEFAULT_IM_END_TOKEN, DEFAULT_SEG_TOKEN, SEG_TOKEN_INDEX, CLS_TOKEN_INDEX
+from psalm.constants import (
+    IGNORE_INDEX,
+    IMAGE_TOKEN_INDEX,
+    DEFAULT_IMAGE_TOKEN,
+    DEFAULT_IM_START_TOKEN,
+    DEFAULT_IM_END_TOKEN,
+    DEFAULT_SEG_TOKEN,
+    SEG_TOKEN_INDEX,
+    CLS_TOKEN_INDEX,
+)
 from psalm.model.builder import load_pretrained_model
 from psalm.utils import disable_torch_init
-from psalm.mm_utils import tokenizer_image_token, get_model_name_from_path, KeywordsStoppingCriteria
+from psalm.mm_utils import (
+    tokenizer_image_token,
+    get_model_name_from_path,
+    KeywordsStoppingCriteria,
+)
 import cv2
 from torch.utils.data import Dataset, DataLoader
 
@@ -112,51 +124,53 @@ def intersectionAndUnionGPU(output, target, K, ignore_index=255):
     area_union = area_output + area_target - area_intersection
     return area_intersection, area_union, area_target
 
-def parse_outputs(outputs,gt_mask):
+
+def parse_outputs(outputs, gt_mask):
     res_list = []
     for output in outputs:
         # gt = output['gt'].cpu().numpy().astype(np.uint8)
 
-        pred_mask = output['instances'].pred_masks
+        pred_mask = output["instances"].pred_masks
         pred_mask = pred_mask.cpu().numpy()
-        scores = output['instances'].scores.cpu().numpy()
+        scores = output["instances"].scores.cpu().numpy()
         try:
-            pred_cls = output['instances'].pred_classes.cpu().numpy()
+            pred_cls = output["instances"].pred_classes.cpu().numpy()
         except:
             pred_cls = None
-        res = {
-            'pred':pred_mask,
-            'gt': gt_mask,
-            'scores':scores,
-            'pred_cls':pred_cls
-        }
+        res = {"pred": pred_mask, "gt": gt_mask, "scores": scores, "pred_cls": pred_cls}
         res_list.append(res)
     return res_list
 
-def compute_metric(intersection_meter,union_meter,acc_iou_meter, gt_cls, results_list):
+
+def compute_metric(
+    intersection_meter, union_meter, acc_iou_meter, gt_cls, results_list
+):
     pred_list = []
     gt_list = []
     results_list = list(results_list)
     for results in results_list:
-        gt = results['gt']
-        preds = results['pred']
-        scores = results['scores']
+        gt = results["gt"]
+        preds = results["pred"]
+        scores = results["scores"]
         preds = preds.astype(np.uint8)
         # pick mask with maximum score
-        topk_scores,idx = torch.topk(torch.tensor(scores),1)
+        topk_scores, idx = torch.topk(torch.tensor(scores), 1)
         idx = idx.cpu().numpy()
-        topk_preds = preds[idx,:]
-        if results['pred_cls'] is not None:
-            topk_pred_cls = results['pred_cls'][idx]
+        topk_preds = preds[idx, :]
+        if results["pred_cls"] is not None:
+            topk_pred_cls = results["pred_cls"][idx]
         max_acc_iou = -1
         max_iou = 0
         max_intersection = 0
         max_union = 0
         max_i = 0
         # here topk=1, len(topk_preds)=1
-        for i,pred_ in enumerate(topk_preds):
+        for i, pred_ in enumerate(topk_preds):
             intersection, union, _ = intersectionAndUnionGPU(
-                torch.tensor(pred_).int().cuda().contiguous().clone(), torch.tensor(gt).int().cuda().contiguous(), 2, ignore_index=255
+                torch.tensor(pred_).int().cuda().contiguous().clone(),
+                torch.tensor(gt).int().cuda().contiguous(),
+                2,
+                ignore_index=255,
             )
             intersection, union = intersection.cpu().numpy(), union.cpu().numpy()
             acc_iou = intersection / (union + 1e-5)
@@ -174,34 +188,31 @@ def compute_metric(intersection_meter,union_meter,acc_iou_meter, gt_cls, results
         pred_list.append(topk_preds[max_i])
         gt_list.append(gt)
 
-    return pred_list,gt_list
-
-
-
-
+    return pred_list, gt_list
 
 
 @dataclass
 class DataArguments:
-    data_path: str = field(default=None,
-                           metadata={"help": "Path to the training data."})
+    data_path: str = field(
+        default=None, metadata={"help": "Path to the training data."}
+    )
     lazy_preprocess: bool = False
     is_multimodal: bool = False
-    image_folder: Optional[str] = field(default='/path/to/val2017')
+    image_folder: Optional[str] = field(default="/path/to/val2017")
     model_path: Optional[str] = field(default="/path/to/model")
-    mask_config: Optional[str] = field(default="./psalm/mask_config/maskformer2_swin_base_384_bs16_50ep.yaml")
-    image_aspect_ratio: str = 'square'
+    mask_config: Optional[str] = field(
+        default="./psalm/mask_config/maskformer2_swin_base_384_bs16_50ep.yaml"
+    )
+    image_aspect_ratio: str = "square"
     image_grid_pinpoints: Optional[str] = field(default=None)
-    json_path: str = '/path/to/coco'
-    model_map_name: str = 'psalm'
-    version: str = 'llava_phi'
-    output_dir: str = './output/panoptic_segmentation'
+    json_path: str = "/path/to/coco"
+    model_map_name: str = "psalm"
+    version: str = "llava_phi"
+    output_dir: str = "./output/panoptic_segmentation"
     segmentation: bool = True
     eval_batch_size: int = 1
     dataloader_num_workers: int = 4
     seg_task: Optional[str] = field(default="referring")
-
-
 
 
 def evaluation():
@@ -210,38 +221,56 @@ def evaluation():
     disable_torch_init()
     model_path = os.path.expanduser(data_args.model_path)
     model_name = get_model_name_from_path(model_path)
-    save_suffix = os.path.basename(data_args.json_path).split('.')[0]
-    print(f'save suffix is {save_suffix}')
-    print(f'current model is {model_path}')
-    tokenizer, model, image_processor, context_len = load_pretrained_model(model_path, None, model_name, model_args=data_args, mask_config=data_args.mask_config, device='cuda')
+    save_suffix = os.path.basename(data_args.json_path).split(".")[0]
+    print(f"save suffix is {save_suffix}")
+    print(f"current model is {model_path}")
+    tokenizer, model, image_processor, context_len = load_pretrained_model(
+        model_path,
+        None,
+        model_name,
+        model_args=data_args,
+        mask_config=data_args.mask_config,
+        device="cuda",
+    )
 
     data_args.image_processor = image_processor
     data_args.is_multimodal = True
-    conversation_lib.default_conversation = conversation_lib.conv_templates[data_args.version]
+    conversation_lib.default_conversation = conversation_lib.conv_templates[
+        data_args.version
+    ]
 
     data_args.refcoco_image_folder = data_args.image_folder
-    eval_dataset = RefCOCO_dataset(json_path=data_args.json_path, tokenizer=tokenizer, data_args=data_args)
+    eval_dataset = RefCOCO_dataset(
+        json_path=data_args.json_path, tokenizer=tokenizer, data_args=data_args
+    )
     data_collator = DataCollatorForCOCODatasetV2(tokenizer=tokenizer)
     dataloader_params = {
         "batch_size": data_args.eval_batch_size,
         "num_workers": data_args.dataloader_num_workers,
     }
-    eval_dataloader = DataLoader(eval_dataset, batch_size=dataloader_params['batch_size'], collate_fn=data_collator,
-                                 num_workers=dataloader_params['num_workers'])
+    eval_dataloader = DataLoader(
+        eval_dataset,
+        batch_size=dataloader_params["batch_size"],
+        collate_fn=data_collator,
+        num_workers=dataloader_params["num_workers"],
+    )
 
     def load_ref_dataset():
-        return RefCOCO_dataset(json_path=data_args.json_path, tokenizer=tokenizer, data_args=data_args)
+        return RefCOCO_dataset(
+            json_path=data_args.json_path, tokenizer=tokenizer, data_args=data_args
+        )
 
-    DatasetCatalog.register('refcoco_dataset', load_ref_dataset)
-    MetadataCatalog.get('refcoco_dataset').set(stuff_classes=['object'],)
+    DatasetCatalog.register("refcoco_dataset", load_ref_dataset)
+    MetadataCatalog.get("refcoco_dataset").set(
+        stuff_classes=["object"],
+    )
     gt_json_path = data_args.json_path
     with open(gt_json_path) as f:
         gt_data = json.load(f)
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-    model.to(device=device,dtype=torch.float).eval()
+    model.to(device=device, dtype=torch.float).eval()
     save_list = []
     intersection_meter = AverageMeter("Intersec", ":6.3f", Summary.SUM)
     union_meter = AverageMeter("Union", ":6.3f", Summary.SUM)
@@ -249,58 +278,71 @@ def evaluation():
 
     with torch.no_grad():
         for idx, inputs in tqdm(enumerate(eval_dataloader), total=len(eval_dataloader)):
-            gt = gt_data[idx]['anns']
-            h, w = gt_data[idx]['image_info']['height'], gt_data[idx]['image_info']['width']
+            gt = gt_data[idx]["anns"]
+            h, w = (
+                gt_data[idx]["image_info"]["height"],
+                gt_data[idx]["image_info"]["width"],
+            )
             # generate gt mask
             masks = []
             for annotation in gt:
-                if isinstance(annotation['segmentation'], list):
+                if isinstance(annotation["segmentation"], list):
                     segm = np.zeros((h, w), dtype=np.uint8)
-                    for poly in annotation['segmentation']:
+                    for poly in annotation["segmentation"]:
                         poly = np.array(poly, dtype=np.int32).reshape(-1, 2)
                         cv2.fillPoly(segm, [poly], 1)
                     masks.append(segm.astype(np.bool_))
                 else:
-                    if isinstance(annotation['segmentation']['counts'], list):
-                        rle = mask.frPyObjects(annotation['segmentation'], *annotation['segmentation']['size'])
+                    if isinstance(annotation["segmentation"]["counts"], list):
+                        rle = mask.frPyObjects(
+                            annotation["segmentation"],
+                            *annotation["segmentation"]["size"],
+                        )
                         segm = mask.decode(rle)
                     else:
-                        segm = mask.decode(annotation['segmentation'])
+                        segm = mask.decode(annotation["segmentation"])
                     masks.append(segm.astype(np.bool_))
             assert len(masks) == 1
             gt_mask = masks[0].astype(np.uint8)
 
-            inputs = {k: v.to(device) if torch.is_tensor(v) else v for k, v in inputs.items()}
-            inputs['token_refer_id'] = [ids.to(device) for ids in inputs['token_refer_id']]
+            inputs = {
+                k: v.to(device) if torch.is_tensor(v) else v for k, v in inputs.items()
+            }
+            inputs["token_refer_id"] = [
+                ids.to(device) for ids in inputs["token_refer_id"]
+            ]
             outputs = model.eval_seg(
-                input_ids=inputs['input_ids'],
-                attention_mask=inputs['attention_mask'],
-                images=inputs['images'].float(),
-                seg_info=inputs['seg_info'],
-                token_refer_id = inputs['token_refer_id'],
-                refer_embedding_indices=inputs['refer_embedding_indices'],
-                labels=inputs['labels']
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                images=inputs["images"].float(),
+                seg_info=inputs["seg_info"],
+                token_refer_id=inputs["token_refer_id"],
+                refer_embedding_indices=inputs["refer_embedding_indices"],
+                labels=inputs["labels"],
             )
-            gt_cls = inputs['seg_info'][0]['instances'].gt_classes
+            gt_cls = inputs["seg_info"][0]["instances"].gt_classes
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
-            cur_res = parse_outputs(outputs,gt_mask)
-            pred,gt_mask = compute_metric(intersection_meter,union_meter,acc_iou_meter, gt_cls, cur_res)
-            save_list.append({'pred':pred[0],'gt':gt_mask[0],'name':inputs['seg_info'][0]['file_name']})
+            cur_res = parse_outputs(outputs, gt_mask)
+            pred, gt_mask = compute_metric(
+                intersection_meter, union_meter, acc_iou_meter, gt_cls, cur_res
+            )
+            save_list.append(
+                {
+                    "pred": pred[0],
+                    "gt": gt_mask[0],
+                    "name": inputs["seg_info"][0]["file_name"],
+                }
+            )
     iou_class = intersection_meter.sum / (union_meter.sum + 1e-10)
     ciou = iou_class[1]
     giou = acc_iou_meter.avg[1]
     msg = "benchmark: {}: giou: {:.4f}, ciou: {:.4f}".format(save_suffix, giou, ciou)
     print(msg)
-    save_path = os.path.join(data_args.model_path,'pred_pkl')
-    Path(save_path).mkdir(parents=True,exist_ok=True)
-    with open(os.path.join(save_path,f'pred_{save_suffix}.txt'),'w') as f:
+    save_path = os.path.join(data_args.model_path, "pred_pkl")
+    Path(save_path).mkdir(parents=True, exist_ok=True)
+    with open(os.path.join(save_path, f"pred_{save_suffix}.txt"), "w") as f:
         f.write(msg)
-
-
-
-
-
 
 
 if __name__ == "__main__":
